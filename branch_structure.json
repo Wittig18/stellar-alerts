@@ -1,0 +1,21 @@
+{
+  "default_branch": "contribution",
+  "branches": [
+    "contribution",
+    "origin",
+    "solver/issue-764-102-a0",
+    "solver/issue-765-101-a0"
+  ],
+  "parent": {
+    "contribution": null,
+    "origin": "contribution",
+    "solver/issue-764-102-a0": "contribution",
+    "solver/issue-765-101-a0": "contribution"
+  },
+  "order": [
+    "contribution",
+    "origin",
+    "solver/issue-764-102-a0",
+    "solver/issue-765-101-a0"
+  ]
+}
