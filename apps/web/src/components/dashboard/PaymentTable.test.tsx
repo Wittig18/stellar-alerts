@@ -79,15 +79,15 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
   it('disables both export buttons when there are no payments', () => {
     render(<PaymentTable payments={[]} isLoading={false} />);
 
-    expect(screen.getByRole('button', { name: /export csv/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /export json/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /export payments as csv/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /export payments as json/i })).toBeDisabled();
   });
 
   it('enables both export buttons once payments exist', () => {
     render(<PaymentTable payments={[makePayment()]} isLoading={false} />);
 
-    expect(screen.getByRole('button', { name: /export csv/i })).not.toBeDisabled();
-    expect(screen.getByRole('button', { name: /export json/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /export payments as csv/i })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /export payments as json/i })).not.toBeDisabled();
   });
 
   it('downloads a CSV with a header row and one row per payment', async () => {
@@ -97,7 +97,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     ];
     render(<PaymentTable payments={payments} isLoading={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as csv/i }));
 
     expect(anchorClicks).toHaveLength(1);
     const anchor = anchorClicks[0];
@@ -120,7 +120,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     const payments = [makePayment({ memo: 'lunch, dinner, and coffee' })];
     render(<PaymentTable payments={payments} isLoading={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as csv/i }));
     const csv = await capture.contentsOf(anchorClicks[0].href);
 
     expect(csv).toContain('"lunch, dinner, and coffee"');
@@ -130,7 +130,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     const payments = [makePayment({ memo: 'he said "hello"' })];
     render(<PaymentTable payments={payments} isLoading={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as csv/i }));
     const csv = await capture.contentsOf(anchorClicks[0].href);
 
     expect(csv).toContain('"he said ""hello"""');
@@ -140,7 +140,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     const payments = [makePayment({ memo: 'line one\nline two' })];
     render(<PaymentTable payments={payments} isLoading={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as csv/i }));
     const csv = await capture.contentsOf(anchorClicks[0].href);
 
     expect(csv).toContain('"line one\nline two"');
@@ -150,7 +150,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     const payments = [makePayment({ memo: undefined })];
     render(<PaymentTable payments={payments} isLoading={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as csv/i }));
     const csv = await capture.contentsOf(anchorClicks[0].href);
     const dataLine = csv.split('\n')[1];
 
@@ -162,7 +162,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     const payments = [makePayment({ id: 'pay-json-1' })];
     render(<PaymentTable payments={payments} isLoading={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /export json/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as json/i }));
 
     expect(anchorClicks).toHaveLength(1);
     const anchor = anchorClicks[0];
@@ -183,7 +183,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     render(<PaymentTable payments={payments} isLoading={false} />);
 
     fireEvent.change(screen.getByTestId('search-input'), { target: { value: 'GAAA' } });
-    fireEvent.click(screen.getByRole('button', { name: /export json/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as json/i }));
 
     const json = await capture.contentsOf(anchorClicks[0].href);
     const parsed = JSON.parse(json);
@@ -199,7 +199,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     render(<PaymentTable payments={payments} isLoading={false} />);
 
     fireEvent.change(screen.getByTestId('asset-filter-select'), { target: { value: 'USDC' } });
-    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as csv/i }));
 
     const csv = await capture.contentsOf(anchorClicks[0].href);
     expect(csv).toContain('pay-usdc');
@@ -215,7 +215,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
 
     fireEvent.change(screen.getByTestId('asset-filter-select'), { target: { value: 'USDC' } });
     fireEvent.click(screen.getByTestId('reset-filters-btn'));
-    fireEvent.click(screen.getByRole('button', { name: /export json/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as json/i }));
 
     const json = await capture.contentsOf(anchorClicks[0].href);
     const parsed = JSON.parse(json);
@@ -225,8 +225,8 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
   it('revokes the object URL after triggering the download, for both formats', () => {
     render(<PaymentTable payments={[makePayment()]} isLoading={false} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
-    fireEvent.click(screen.getByRole('button', { name: /export json/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as json/i }));
 
     expect(URL.revokeObjectURL).toHaveBeenCalledTimes(2);
   });
@@ -237,7 +237,7 @@ describe('PaymentTable CSV/JSON export (issue #582)', () => {
     // The button is disabled, but exercise the handler's own empty-list
     // guard directly in case disabled-state styling is ever the only thing
     // preventing a click (e.g. a future variant without the disabled prop).
-    fireEvent.click(screen.getByRole('button', { name: /export csv/i }));
+    fireEvent.click(screen.getByRole('button', { name: /export payments as csv/i }));
 
     expect(anchorClicks).toHaveLength(0);
   });

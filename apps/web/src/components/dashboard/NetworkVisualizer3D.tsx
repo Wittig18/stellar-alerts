@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { OrbitControls as ThreeOrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { PaymentDTO } from '@stellar-alerts/shared';
 import {
   buildScene,
@@ -117,6 +118,33 @@ const StreamBeam: React.FC<{ stream: PaymentStream }> = ({ stream }) => {
   );
 };
 
+/**
+ * Mounts three.js's own OrbitControls (the project doesn't depend on
+ * @react-three/drei) into the R3F render loop so users can drag-orbit,
+ * scroll-zoom, and right-click-pan the scene. Acceptance criterion: "Renders
+ * interactive 3D scene with orbit controls and responsive camera resize."
+ */
+const OrbitControlsRig: React.FC = () => {
+  const { camera, gl } = useThree();
+  const controlsRef = useRef<ThreeOrbitControls | null>(null);
+
+  useEffect(() => {
+    const controls = new ThreeOrbitControls(camera, gl.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
+    controls.minDistance = 4;
+    controls.maxDistance = 40;
+    controlsRef.current = controls;
+    return () => controls.dispose();
+  }, [camera, gl]);
+
+  useFrame(() => {
+    controlsRef.current?.update();
+  });
+
+  return null;
+};
+
 /** The three.js scene contents — rendered inside <Canvas>. */
 export const StreamField: React.FC<{ scene: VisualizerScene }> = ({ scene }) => {
   const groupRef = useRef<THREE.Group>(null);
@@ -130,6 +158,7 @@ export const StreamField: React.FC<{ scene: VisualizerScene }> = ({ scene }) => 
       <ambientLight intensity={0.4} />
       <pointLight position={[10, 10, 10]} intensity={120} color="#22d3ee" />
       <pointLight position={[-10, -6, -10]} intensity={80} color="#6366f1" />
+      <OrbitControlsRig />
       <group ref={groupRef}>
         {scene.nodes.map((node) => (
           <AccountNode key={node.id} position={node.position} isHub={node.isHub} />

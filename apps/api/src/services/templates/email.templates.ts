@@ -2,6 +2,8 @@
  * Email Templates Module — Versioned & HTML Escaped
  */
 
+import type { EmailTemplateDTO } from '@stellar-alerts/shared';
+
 export interface PaymentReceiptTemplateData {
   paymentId: string;
   txHash: string;
@@ -12,6 +14,12 @@ export interface PaymentReceiptTemplateData {
   receivedAt: string;
   recipientEmail?: string;
   unsubscribeUrl?: string;
+  /**
+   * Merchant branding saved from the email template builder (#572). When
+   * present, the receipt is rendered with the custom logo/colors; when absent
+   * the platform default receipt template is used.
+   */
+  branding?: EmailTemplateDTO | null;
 }
 
 export interface PaymentFailureTemplateData {
@@ -49,6 +57,10 @@ export function renderPaymentReceiptTemplate(data: PaymentReceiptTemplateData): 
   text: string;
   version: string;
 } {
+  if (data.branding) {
+    return renderBrandedPaymentReceiptTemplate(data, data.branding);
+  }
+
   const version = 'v1';
   const escapedAmount = escapeHtml(data.amount);
   const escapedAsset = escapeHtml(data.asset);
@@ -121,6 +133,145 @@ export function renderPaymentReceiptTemplate(data: PaymentReceiptTemplateData): 
 </html>`;
 
   const text = `Stellar Payment Received: ${data.amount} ${data.asset}\nPayment ID: ${data.paymentId}\nTx Hash: ${data.txHash}\nFrom: ${data.fromAddress}\nReceived At: ${data.receivedAt}`;
+
+  return { subject, html, text, version };
+}
+
+/**
+ * Render the merchant-branded payment receipt (#572).
+ *
+ * Mirrors the live preview in `EmailTemplatePreview` using email-client-safe
+ * table markup and inline styles (no `<style>` blocks), so the colors, logo
+ * and footer survive Gmail/Outlook sanitizers. Every interpolated value is
+ * escaped — branding is user-supplied.
+ */
+export function renderBrandedPaymentReceiptTemplate(
+  data: PaymentReceiptTemplateData,
+  branding: EmailTemplateDTO,
+): {
+  subject: string;
+  html: string;
+  text: string;
+  version: string;
+} {
+  const version = 'v2-branded';
+  const rawBrandName = (branding.brandName || 'StellarAlerts').trim() || 'StellarAlerts';
+  const brandName = escapeHtml(rawBrandName);
+  const primary = escapeHtml(branding.primaryColor);
+  const accent = escapeHtml(branding.accentColor);
+  const footerText = escapeHtml(branding.footerText);
+  const logoUrl = branding.logoUrl ? escapeHtml(branding.logoUrl) : '';
+
+  const escapedAmount = escapeHtml(data.amount);
+  const escapedAsset = escapeHtml(data.asset);
+  const escapedIssuer = data.assetIssuer ? escapeHtml(data.assetIssuer) : null;
+  const escapedPaymentId = escapeHtml(data.paymentId);
+  const escapedTxHash = escapeHtml(data.txHash);
+  const escapedFrom = escapeHtml(data.fromAddress);
+  const escapedReceivedAt = escapeHtml(data.receivedAt);
+  const unsubscribeUrl = data.unsubscribeUrl
+    ? escapeHtml(data.unsubscribeUrl)
+    : 'https://stellar-alerts.org/settings/notifications';
+
+  const subject = `[${rawBrandName}] Payment Received: ${escapedAmount} ${escapedAsset}`;
+
+  const logoBlock = logoUrl
+    ? `<img src="${logoUrl}" alt="${brandName}" width="140" style="max-height:64px;border:0;display:inline-block;" />`
+    : `<div style="width:52px;height:52px;border-radius:12px;background:linear-gradient(135deg,${primary},${accent});color:#ffffff;font-size:22px;font-weight:800;display:inline-flex;align-items:center;justify-content:center;">${escapeHtml(
+        rawBrandName.charAt(0).toUpperCase(),
+      )}</div>`;
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="x-template-version" content="${version}">
+  <title>${brandName} — Payment Received: ${escapedAmount} ${escapedAsset}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f5f9;padding:32px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;background-color:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0;">
+          <tr>
+            <td style="background:linear-gradient(135deg,${primary},${accent});padding:28px 32px;text-align:center;">
+              <div style="margin-bottom:8px;">${logoBlock}</div>
+              <div style="color:#ffffff;font-size:13px;font-weight:600;letter-spacing:0.5px;opacity:0.95;">PAYMENT RECEIPT</div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:32px;">
+              <div style="font-size:18px;color:#0f172a;font-weight:700;margin-bottom:20px;">Hello ${brandName}!</div>
+              <div style="color:#475569;font-size:14px;line-height:1.6;margin-bottom:24px;">You received a new payment on the Stellar network.</div>
+              <div style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:20px 24px;margin-bottom:24px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                  <tr>
+                    <td style="padding:6px 0;">
+                      <div style="color:#94a3b8;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Amount Received</div>
+                      <div style="color:${primary};font-size:32px;font-weight:800;line-height:1.2;">${escapedAmount} <span style="color:#0f172a;font-weight:700;">${escapedAsset}</span></div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;">
+                      <div style="color:#94a3b8;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">From</div>
+                      <div style="color:#334155;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;">${escapedFrom}</div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;">
+                      <div style="color:#94a3b8;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Transaction</div>
+                      <div style="color:#334155;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;">${escapedTxHash}</div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:6px 0;">
+                      <div style="color:#94a3b8;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Payment ID</div>
+                      <div style="color:#334155;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;">${escapedPaymentId}</div>
+                    </td>
+                  </tr>
+                  ${
+                    escapedIssuer
+                      ? `<tr><td style="padding:6px 0;"><div style="color:#94a3b8;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Asset Issuer</div><div style="color:#334155;font-size:13px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all;">${escapedIssuer}</div></td></tr>`
+                      : ''
+                  }
+                  <tr>
+                    <td style="padding:6px 0;">
+                      <div style="color:#94a3b8;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Received At</div>
+                      <div style="color:#334155;font-size:13px;">${escapedReceivedAt}</div>
+                    </td>
+                  </tr>
+                </table>
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="background-color:#f8fafc;border-top:1px solid #e2e8f0;padding:20px 32px;text-align:center;">
+              <div style="color:${accent};font-size:12px;font-weight:700;margin-bottom:6px;">${brandName}</div>
+              <div style="color:#94a3b8;font-size:11px;line-height:1.5;">${footerText}</div>
+              <div style="color:#94a3b8;font-size:11px;line-height:1.5;margin-top:8px;">
+                Manage email alerts or unsubscribe in your <a href="${unsubscribeUrl}" style="color:${primary};text-decoration:none;">Notification Preferences</a>.
+              </div>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+  const text = [
+    `${rawBrandName} — Payment Received`,
+    `Amount: ${data.amount} ${data.asset}`,
+    `Payment ID: ${data.paymentId}`,
+    `Tx Hash: ${data.txHash}`,
+    `From: ${data.fromAddress}`,
+    `Received At: ${data.receivedAt}`,
+    branding.footerText,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   return { subject, html, text, version };
 }

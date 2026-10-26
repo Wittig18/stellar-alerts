@@ -31,6 +31,8 @@ const PAYMENT_ENDPOINTS: EndpointDoc[] = [
 const NOTIFICATION_ENDPOINTS: EndpointDoc[] = [
   { method: 'GET', path: '/notifications/preferences', summary: 'Read notification preferences.', auth: 'Session' },
   { method: 'POST', path: '/notifications/preferences', summary: 'Persist telegram/email/emailTemplate preferences.', auth: 'Session' },
+  { method: 'GET', path: '/users/me/preferences', summary: 'Read the signed-in user\'s notification preferences.', auth: 'Session' },
+  { method: 'PUT', path: '/users/me/preferences', summary: 'Update Telegram/email alert toggles (MFA code required when enabled).', auth: 'Session' },
 ];
 
 const DEAD_LETTER_ENDPOINTS: EndpointDoc[] = [

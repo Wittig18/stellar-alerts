@@ -1,6 +1,7 @@
 import fp from 'fastify-plugin';
 import { FastifyInstance } from 'fastify';
 import { dbFailover } from '../lib/db-failover';
+import { replicaLagMonitor } from '../lib/database-router';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const RETRY_AFTER_SECONDS = 15;
@@ -37,9 +38,14 @@ export default fp(async (server: FastifyInstance) => {
 
   server.addHook('onReady', async () => {
     dbFailover.start();
+    // Read-replica lag probing (#728): independent of primary-outage
+    // failover above, this keeps read traffic off a replica that has
+    // fallen behind on WAL replay even while the primary is perfectly healthy.
+    replicaLagMonitor.start();
   });
 
   server.addHook('onClose', async () => {
     dbFailover.stop();
+    replicaLagMonitor.stop();
   });
 });

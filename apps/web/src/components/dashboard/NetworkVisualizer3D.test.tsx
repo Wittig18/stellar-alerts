@@ -10,6 +10,17 @@ import type { PaymentDTO } from '@stellar-alerts/shared';
 vi.mock('@react-three/fiber', () => ({
   Canvas: () => <div data-testid="r3f-canvas" />,
   useFrame: () => undefined,
+  useThree: () => ({ camera: {}, gl: { domElement: document.createElement('div') } }),
+}));
+
+// OrbitControls needs a real WebGL-ish DOM (pointer capture, etc.) that jsdom
+// doesn't provide; the component test only exercises DOM chrome via the
+// mocked <Canvas> above, so the control rig itself is mocked out too.
+vi.mock('three/examples/jsm/controls/OrbitControls.js', () => ({
+  OrbitControls: class {
+    update() {}
+    dispose() {}
+  },
 }));
 
 import { NetworkVisualizer3D } from './NetworkVisualizer3D';
@@ -20,6 +31,8 @@ import {
   normalizeAmount,
   buildScene,
   sceneLegend,
+  isSorobanSacIssuer,
+  SOROBAN_SAC_COLOR,
   HUB_ID,
   type VisualizerPayment,
 } from './networkVisualizer.helpers';
@@ -54,6 +67,30 @@ describe('networkVisualizer.helpers', () => {
     it('falls back to a neutral colour for empty/missing assets', () => {
       expect(assetColor('')).toBe('#64748b');
       expect(assetColor(null)).toBe('#64748b');
+    });
+
+    it('colours Soroban SAC tokens purple regardless of asset code (#729)', () => {
+      const contractId = 'C' + 'A'.repeat(55);
+      expect(assetColor('USDC', contractId)).toBe(SOROBAN_SAC_COLOR);
+      expect(assetColor('ANYTHING', contractId)).toBe(SOROBAN_SAC_COLOR);
+    });
+
+    it('does not treat a classic account issuer as a Soroban SAC', () => {
+      const accountId = 'G' + 'A'.repeat(55);
+      expect(assetColor('USDC', accountId)).toBe('#3b82f6');
+    });
+  });
+
+  describe('isSorobanSacIssuer', () => {
+    it('recognises Stellar contract ids (StrKey "C...")', () => {
+      expect(isSorobanSacIssuer('C' + 'A'.repeat(55))).toBe(true);
+    });
+
+    it('rejects classic account ids, null, and malformed input', () => {
+      expect(isSorobanSacIssuer('G' + 'A'.repeat(55))).toBe(false);
+      expect(isSorobanSacIssuer(null)).toBe(false);
+      expect(isSorobanSacIssuer(undefined)).toBe(false);
+      expect(isSorobanSacIssuer('not-a-strkey')).toBe(false);
     });
   });
 

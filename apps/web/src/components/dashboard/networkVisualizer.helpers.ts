@@ -13,6 +13,13 @@ export interface VisualizerPayment {
   toAddress?: string | null;
   amount: number | string;
   asset: string;
+  /**
+   * The asset's issuer account (classic assets, e.g. USDC) or Soroban
+   * contract id (SAC tokens; Stellar contract ids are StrKey "C..."). Used
+   * only to recognise Soroban SAC tokens for the purple-colour acceptance
+   * criterion (#729) — it never overrides a known asset code's colour.
+   */
+  assetIssuer?: string | null;
   receivedAt?: string | Date;
 }
 
@@ -73,12 +80,28 @@ const FALLBACK_PALETTE = [
   '#d946ef', // fuchsia-500
 ];
 
+/** Purple used for Soroban SAC (contract-issued) tokens per #729's acceptance criteria. */
+export const SOROBAN_SAC_COLOR = '#a855f7'; // purple-500
+
 /**
- * Maps an asset code to a deterministic hex colour. Known assets use a fixed
- * palette; unknown ones are hashed into a stable fallback colour so the same
- * asset always renders the same hue across re-renders.
+ * True when `issuer` is a Soroban contract id rather than a classic Stellar
+ * account — StrKey contract ids start with "C" (vs. "G" for accounts).
+ * Payments whose asset is issued by a contract are Soroban Asset Contract
+ * (SAC) tokens, which get a distinct purple colour regardless of asset code.
  */
-export function assetColor(asset: string | null | undefined): string {
+export function isSorobanSacIssuer(issuer: string | null | undefined): boolean {
+  return typeof issuer === 'string' && /^C[A-Z2-7]{55}$/.test(issuer.trim());
+}
+
+/**
+ * Maps an asset code to a deterministic hex colour. A Soroban SAC issuer
+ * always renders purple; otherwise known assets use a fixed palette and
+ * unknown ones are hashed into a stable fallback colour so the same asset
+ * always renders the same hue across re-renders.
+ */
+export function assetColor(asset: string | null | undefined, assetIssuer?: string | null): string {
+  if (isSorobanSacIssuer(assetIssuer)) return SOROBAN_SAC_COLOR;
+
   const code = (asset ?? '').trim().toUpperCase();
   if (!code) return '#64748b'; // slate-500
   if (ASSET_COLORS[code]) return ASSET_COLORS[code];
@@ -169,7 +192,7 @@ export function buildScene(
         to: HUB_ID,
         amount: normalizeAmount(payment.amount),
         asset: (payment.asset ?? '').toUpperCase() || 'XLM',
-        color: assetColor(payment.asset),
+        color: assetColor(payment.asset, payment.assetIssuer),
         speed: amountToSpeed(payment.amount),
         particleCount: amountToParticleCount(payment.amount),
         fromPosition: positionByAddress.get(from) ?? [0, 0, 0],

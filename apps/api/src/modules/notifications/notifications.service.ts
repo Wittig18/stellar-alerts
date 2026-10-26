@@ -1,11 +1,12 @@
 /**
  * Notifications Service
- * 
+ *
  * Handles notification preference updates with MFA protection and multi-channel support:
- * Telegram, Email, WhatsApp, Discord, Slack, and Push Protocol.
+ * Telegram, Email, WhatsApp, Discord, Slack, Push Protocol, PagerDuty, and Opsgenie.
  */
 
 import { Prisma } from '../../../generated/prisma/client';
+import type { EmailTemplateDTO } from '@stellar-alerts/shared';
 import { prisma } from '../../lib/prisma';
 import { mfaService } from '../auth/mfa.service';
 import { encryptPersonalField, decryptPersonalField } from '../../utils/privacy';
@@ -13,7 +14,14 @@ import { isValidE164Number } from '../../utils/whatsapp';
 import { isValidSlackWebhookUrl } from '../../utils/slack';
 import { ValidationError } from '../../lib/errors';
 import { dispatchPushNotification } from '../../utils/push-protocol';
+import { createLogger } from '../../lib/logger';
 import { slackNotificationProvider } from './providers/slack.provider';
+import { discordNotificationProvider } from './providers/discord.provider';
+import type { DiscordAlertInput, DiscordDispatchOptions } from './providers/discord.provider';
+import type { PagerDutyAlertInput } from './providers/pagerduty.provider';
+import type { OpsgenieAlertInput } from './providers/opsgenie.provider';
+
+const logger = createLogger({ module: 'NotificationsService' });
 
 export function isValidDiscordWebhookUrl(url: string): boolean {
   try {
@@ -40,12 +48,22 @@ export interface NotificationPreferences {
   slackEnabled?: boolean;
   pushChannelAddress?: string | null;
   pushEnabled?: boolean;
+  pagerDutyRoutingKey?: string | null;
+  pagerDutyEnabled?: boolean;
+  opsgenieApiKey?: string | null;
+  opsgenieEnabled?: boolean;
   enabledChannels?: string[];
   assetFilters?: string[];
   minAmount?: number | string | null;
   receiptPreference?: 'instant' | 'daily_digest' | 'summary' | string;
+  digestFrequency?: 'daily' | 'weekly' | 'off' | string;
   language?: string;
   filterRules?: any;
+  /**
+   * Custom branded receipt template (#572). Send `null` to reset the user
+   * back to the platform default receipt styling.
+   */
+  emailTemplate?: EmailTemplateDTO | null;
 }
 
 export class NotificationsService {
@@ -112,6 +130,22 @@ export class NotificationsService {
       }
     }
 
+    // Validate PagerDuty routing key if supplied
+    if (preferences.pagerDutyRoutingKey !== undefined && preferences.pagerDutyRoutingKey !== null && preferences.pagerDutyRoutingKey !== '') {
+      const { pagerDutyProvider } = await import('./providers/pagerduty.provider');
+      if (!pagerDutyProvider.isValidRoutingKey(preferences.pagerDutyRoutingKey)) {
+        throw new ValidationError('Invalid PagerDuty routing key. Must be a 32-character integration key.', undefined, 'INVALID_PAGERDUTY_ROUTING_KEY');
+      }
+    }
+
+    // Validate Opsgenie API key if supplied
+    if (preferences.opsgenieApiKey !== undefined && preferences.opsgenieApiKey !== null && preferences.opsgenieApiKey !== '') {
+      const { opsgenieProvider } = await import('./providers/opsgenie.provider');
+      if (!opsgenieProvider.isValidApiKey(preferences.opsgenieApiKey)) {
+        throw new ValidationError('Invalid Opsgenie API key.', undefined, 'INVALID_OPSGENIE_API_KEY');
+      }
+    }
+
     // Validate receipt preference
     if (preferences.receiptPreference !== undefined && preferences.receiptPreference !== null) {
       const allowedReceipts = ['instant', 'daily_digest', 'summary'];
@@ -120,6 +154,18 @@ export class NotificationsService {
           `Invalid receipt preference. Allowed values: ${allowedReceipts.join(', ')}`,
           undefined,
           'INVALID_RECEIPT_PREFERENCE'
+        );
+      }
+    }
+
+    // Validate digest frequency
+    if (preferences.digestFrequency !== undefined && preferences.digestFrequency !== null) {
+      const allowedFrequencies = ['daily', 'weekly', 'off'];
+      if (!allowedFrequencies.includes(preferences.digestFrequency)) {
+        throw new ValidationError(
+          `Invalid digest frequency. Allowed values: ${allowedFrequencies.join(', ')}`,
+          undefined,
+          'INVALID_DIGEST_FREQUENCY'
         );
       }
     }
@@ -142,12 +188,21 @@ export class NotificationsService {
       if (!Array.isArray(preferences.enabledChannels)) {
         throw new ValidationError('enabledChannels must be an array.', undefined, 'INVALID_ENABLED_CHANNELS');
       }
-      const allowedChannels = ['telegram', 'email', 'whatsapp', 'discord', 'slack', 'push'];
+      const allowedChannels = ['telegram', 'email', 'whatsapp', 'discord', 'slack', 'push', 'pagerduty', 'opsgenie'];
       for (const ch of preferences.enabledChannels) {
         if (!allowedChannels.includes(ch)) {
           throw new ValidationError(`Unknown channel in enabledChannels: ${ch}`, undefined, 'INVALID_CHANNEL_NAME');
         }
       }
+    }
+
+    // Validate and normalize the custom receipt branding (#572). `null`
+    // explicitly resets the user back to the platform default template.
+    let emailTemplate: EmailTemplateDTO | null | undefined;
+    if (preferences.emailTemplate === null) {
+      emailTemplate = null;
+    } else if (preferences.emailTemplate !== undefined) {
+      emailTemplate = normalizeEmailTemplatePreferences(preferences.emailTemplate);
     }
 
     const dataToSave: any = {
@@ -160,7 +215,11 @@ export class NotificationsService {
       slackEnabled: preferences.slackEnabled,
       pushChannelAddress: preferences.pushChannelAddress,
       pushEnabled: preferences.pushEnabled,
+      pagerDutyEnabled: preferences.pagerDutyEnabled,
+      opsgenieEnabled: preferences.opsgenieEnabled,
+      emailTemplate,
       receiptPreference: preferences.receiptPreference,
+      digestFrequency: preferences.digestFrequency,
       assetFilters: preferences.assetFilters,
       minAmount: preferences.minAmount !== undefined && preferences.minAmount !== null
         ? String(preferences.minAmount)
@@ -180,6 +239,18 @@ export class NotificationsService {
       dataToSave.whatsappNumber = preferences.whatsappNumber
         ? encryptPersonalField(preferences.whatsappNumber)
         : preferences.whatsappNumber;
+    }
+
+    if (preferences.pagerDutyRoutingKey !== undefined) {
+      dataToSave.pagerDutyRoutingKey = preferences.pagerDutyRoutingKey
+        ? encryptPersonalField(preferences.pagerDutyRoutingKey)
+        : preferences.pagerDutyRoutingKey;
+    }
+
+    if (preferences.opsgenieApiKey !== undefined) {
+      dataToSave.opsgenieApiKey = preferences.opsgenieApiKey
+        ? encryptPersonalField(preferences.opsgenieApiKey)
+        : preferences.opsgenieApiKey;
     }
 
     // Clean undefined fields for Prisma
@@ -217,7 +288,12 @@ export class NotificationsService {
       ...pref,
       telegramChatId: decryptPersonalField(pref.telegramChatId),
       whatsappNumber: decryptPersonalField(pref.whatsappNumber),
+      pagerDutyRoutingKey: decryptPersonalField((pref as any).pagerDutyRoutingKey),
+      opsgenieApiKey: decryptPersonalField((pref as any).opsgenieApiKey),
       minAmount: pref.minAmount ? pref.minAmount.toString() : null,
+      // Re-normalized on read so a malformed/legacy JSON row can never leak
+      // into the editor or a receipt email.
+      emailTemplate: parseStoredEmailTemplate(pref.emailTemplate),
     };
   }
 
@@ -296,13 +372,135 @@ export class NotificationsService {
   }
 
   /**
-   * Dispatch an interactive Slack Block Kit notification (#637).
+   * Dispatch a Slack Block Kit notification to a webhook or bot channel.
    */
   async dispatchSlackNotification(
-    target: { webhookUrl?: string; botToken?: string; channel?: string },
-    data: Parameters<typeof slackNotificationProvider.buildBlockKitPayload>[0],
+    target: { webhookUrl?: string | null; botToken?: string | null; channel?: string | null },
+    alert: Parameters<typeof slackNotificationProvider.dispatch>[1],
+    options?: Parameters<typeof slackNotificationProvider.dispatch>[2],
   ) {
-    return slackNotificationProvider.dispatch(target, data);
+    const slackTarget: { webhookUrl?: string; botToken?: string; channel?: string } = {};
+    if (target.webhookUrl) slackTarget.webhookUrl = target.webhookUrl;
+    if (target.botToken) slackTarget.botToken = target.botToken;
+    if (target.channel) slackTarget.channel = target.channel;
+
+    if (options) {
+      return slackNotificationProvider.dispatch(slackTarget, alert, options);
+    }
+    return slackNotificationProvider.dispatch(slackTarget, alert);
+  }
+
+  /**
+   * Dispatch a native Discord embed alert to a user-configured webhook.
+   * Handles severity colors, Stellar Expert links, asset icons, and
+   * Discord rate-limit retries.
+   */
+  async dispatchDiscordNotification(
+    target: { webhookUrl?: string | null },
+    alert: DiscordAlertInput,
+    options?: DiscordDispatchOptions,
+  ) {
+    return discordNotificationProvider.dispatch(
+      { webhookUrl: target.webhookUrl ?? undefined },
+      alert,
+      options,
+    );
+  }
+
+  /**
+   * Dispatch a PagerDuty incident trigger (Events API v2) for a security alert.
+   * Maps alert severity (critical/error/warning) to PagerDuty severity and
+   * derives a stable deduplication key so repeated alerts collapse into one
+   * incident.
+   */
+  async dispatchPagerDutyIncident(
+    target: { routingKey?: string },
+    alert: {
+      severity: 'critical' | 'error' | 'warning';
+      summary: string;
+      source?: string;
+      dedupKey?: string;
+      component?: string;
+      group?: string;
+      class?: string;
+      customDetails?: Record<string, unknown>;
+      links?: Array<{ href: string; text?: string }>;
+    },
+  ) {
+    const { pagerDutyProvider } = await import('./providers/pagerduty.provider');
+    const input: PagerDutyAlertInput = {
+      message: alert.summary,
+      severity: alert.severity,
+      source: alert.source,
+      dedupKey: alert.dedupKey,
+      component: alert.component,
+      group: alert.group,
+      class: alert.class,
+      customDetails: alert.customDetails,
+      links: alert.links,
+    };
+    return pagerDutyProvider.dispatchTrigger(input, { routingKey: target.routingKey });
+  }
+
+  /**
+   * Dispatch an Opsgenie alert for a security alert.
+   * Maps alert severity to Opsgenie priority (P1-P5) and attaches tags.
+   */
+  async dispatchOpsgenieAlert(
+    target: { apiKey?: string },
+    alert: {
+      severity: 'critical' | 'error' | 'warning';
+      message: string;
+      alias?: string;
+      description?: string;
+      source?: string;
+      tags?: string[];
+      details?: Record<string, string>;
+      responders?: Array<Record<string, unknown>>;
+    },
+  ) {
+    const { opsgenieProvider } = await import('./providers/opsgenie.provider');
+    const input: OpsgenieAlertInput = {
+      message: alert.message,
+      severity: alert.severity,
+      alias: alert.alias,
+      description: alert.description,
+      source: alert.source,
+      tags: alert.tags,
+      details: alert.details,
+      responders: alert.responders as OpsgenieAlertInput['responders'],
+    };
+    return opsgenieProvider.dispatchAlert(input, { apiKey: target.apiKey });
+  }
+
+  /**
+   * Trigger the 24-hour transaction & security digest for a single user.
+   * Respects the user's digest frequency setting (daily/weekly/off).
+   *
+   * @param userId - User ID
+   * @param options - Optional overrides (e.g. force send for testing)
+   */
+  async sendDigest(
+    userId: string,
+    options: { force?: boolean } = {}
+  ): Promise<{ sent: boolean; reason?: string }> {
+    const prefs = await prisma.notificationPreference.findUnique({ where: { userId } });
+    if (!prefs) {
+      return { sent: false, reason: 'no_preferences' };
+    }
+    // Lazy-load the digest worker so a broken/missing worker module cannot
+    // break this service at import time.
+    try {
+      const mod = await import('../../workers/digest.worker');
+      const digestWorker = (mod as any)?.digestWorker;
+      if (!digestWorker || typeof digestWorker.processUser !== 'function') {
+        return { sent: false, reason: 'digest_worker_unavailable' };
+      }
+      return await digestWorker.processUser(userId, prefs, options);
+    } catch (error: any) {
+      logger.warn?.('[NotificationsService] digest worker unavailable', error?.message);
+      return { sent: false, reason: error?.message || 'digest_worker_unavailable' };
+    }
   }
 }
 

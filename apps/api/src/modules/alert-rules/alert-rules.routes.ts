@@ -1,47 +1,47 @@
 import { FastifyInstance } from 'fastify';
 import { alertRulesController } from './alert-rules.controller';
-import { authenticateHook } from '../../middleware/auth.middleware';
+import { authenticate, requireScopes } from '../../middleware/rbac.middleware';
 
 export async function alertRulesRoutes(app: FastifyInstance) {
   app.post(
     '/alert-rules',
-    { preHandler: [authenticateHook] },
+    { preHandler: [authenticate, requireScopes('alerts:write')] },
     alertRulesController.createRule.bind(alertRulesController)
   );
 
   app.get(
     '/alert-rules',
-    { preHandler: [authenticateHook] },
+    { preHandler: [authenticate, requireScopes('alerts:write')] },
     alertRulesController.getRules.bind(alertRulesController)
   );
 
   app.get(
     '/alert-rules/:id',
-    { preHandler: [authenticateHook] },
+    { preHandler: [authenticate, requireScopes('alerts:write')] },
     alertRulesController.getRule.bind(alertRulesController)
   );
 
   app.put(
     '/alert-rules/:id',
-    { preHandler: [authenticateHook] },
+    { preHandler: [authenticate, requireScopes('alerts:write')] },
     alertRulesController.updateRule.bind(alertRulesController)
   );
 
   app.delete(
     '/alert-rules/:id',
-    { preHandler: [authenticateHook] },
+    { preHandler: [authenticate, requireScopes('alerts:write')] },
     alertRulesController.deleteRule.bind(alertRulesController)
   );
 
   app.post(
     '/alert-rules/:id/toggle',
-    { preHandler: [authenticateHook] },
+    { preHandler: [authenticate, requireScopes('alerts:write')] },
     alertRulesController.toggleRuleActive.bind(alertRulesController)
   );
 
   app.post(
     '/alert-rules/migrate-legacy',
-    { preHandler: [authenticateHook] },
+    { preHandler: [authenticate, requireScopes('alerts:write')] },
     alertRulesController.migrateLegacy.bind(alertRulesController)
   );
 }

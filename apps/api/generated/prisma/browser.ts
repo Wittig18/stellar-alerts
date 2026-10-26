@@ -23,6 +23,11 @@ export * from './enums';
  */
 export type User = Prisma.UserModel
 /**
+ * Model ApiKey
+ * 
+ */
+export type ApiKey = Prisma.ApiKeyModel
+/**
  * Model Wallet
  * 
  */
@@ -37,6 +42,11 @@ export type IngestionCursor = Prisma.IngestionCursorModel
  * 
  */
 export type Payment = Prisma.PaymentModel
+/**
+ * Model PaymentArchive
+ * 
+ */
+export type PaymentArchive = Prisma.PaymentArchiveModel
 /**
  * Model OutboxEvent
  * 

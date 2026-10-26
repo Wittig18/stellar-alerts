@@ -9,9 +9,11 @@
  * 🟢 You can import this file directly.
  */
 export type * from './models/User'
+export type * from './models/ApiKey'
 export type * from './models/Wallet'
 export type * from './models/IngestionCursor'
 export type * from './models/Payment'
+export type * from './models/PaymentArchive'
 export type * from './models/OutboxEvent'
 export type * from './models/NotificationPreference'
 export type * from './models/DeliveryLog'

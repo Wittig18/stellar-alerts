@@ -1,23 +1,15 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { EmailTemplateDTO } from '@stellar-alerts/shared';
 
 /**
  * Email template variables a merchant can customize before their receipt
- * emails are generated. The resulting `emailHtml` (see
- * `buildEmailTemplateHtml`) is what gets baked into each payment receipt.
+ * emails are generated. The branding fields are persisted to the user
+ * preference schema; the sample transaction values only drive the live
+ * preview and are never saved.
  */
-export interface EmailTemplateConfig {
-  /** Brand / merchant name shown in the receipt header. */
-  brandName: string;
-  /** Absolute URL to the brand logo. Empty string falls back to a monogram. */
-  logoUrl: string;
-  /** Primary brand color used for headers, buttons and accents (hex). */
-  primaryColor: string;
-  /** Secondary accent color used for highlighted details (hex). */
-  accentColor: string;
-  /** Small print rendered in the email footer. */
-  footerText: string;
+export interface EmailTemplateConfig extends EmailTemplateDTO {
   /** Sample transaction values rendered in the live preview. */
   amount: string;
   asset: string;
@@ -174,6 +166,8 @@ const FIELD_LABEL_CLASS =
 const FIELD_INPUT_CLASS =
   'w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500/70 text-sm transition-colors';
 
+type PreviewDevice = 'desktop' | 'mobile';
+
 export const EmailTemplatePreview: React.FC<EmailTemplatePreviewProps> = ({
   onSaveTemplate,
   initialTemplate,
@@ -183,9 +177,54 @@ export const EmailTemplatePreview: React.FC<EmailTemplatePreviewProps> = ({
     ...initialTemplate,
   });
   const [showSource, setShowSource] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewDevice, setPreviewDevice] = useState<PreviewDevice>('desktop');
+  const [isSaving, setIsSaving] = useState(false);
+  const [status, setStatus] = useState<{ kind: 'success' | 'error'; message: string } | null>(
+    null,
+  );
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const previewHtml = useMemo(() => buildEmailTemplateHtml(template), [template]);
+
+  // Hydrate from saved preferences without clobbering in-progress edits: the
+  // key only changes when the parent supplies a different saved template.
+  const initialTemplateKey = useMemo(
+    () => (initialTemplate ? JSON.stringify(initialTemplate) : ''),
+    [initialTemplate],
+  );
+
+  useEffect(() => {
+    if (!initialTemplateKey) return;
+    const parsed = JSON.parse(initialTemplateKey) as Partial<EmailTemplateConfig>;
+    setTemplate((prev) => ({ ...prev, ...parsed }));
+  }, [initialTemplateKey]);
+
+  // Auto-dismiss the success confirmation but keep errors on screen.
+  useEffect(() => {
+    if (status?.kind !== 'success') return;
+    const timer = window.setTimeout(() => setStatus(null), 2500);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
+  // Modal behaviour: Escape closes it, background scroll is locked, and focus
+  // moves to the close control when it opens.
+  useEffect(() => {
+    if (!isPreviewOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsPreviewOpen(false);
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.addEventListener('keydown', handleKeyDown);
+    document.body.style.overflow = 'hidden';
+    closeButtonRef.current?.focus();
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isPreviewOpen]);
 
   const updateField = <K extends keyof EmailTemplateConfig>(field: K, value: EmailTemplateConfig[K]) => {
     setTemplate((prev) => ({ ...prev, [field]: value }));
@@ -193,11 +232,28 @@ export const EmailTemplatePreview: React.FC<EmailTemplatePreviewProps> = ({
 
   const handleSave = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (onSaveTemplate) {
-      await onSaveTemplate(template);
+    setStatus(null);
+
+    if (!onSaveTemplate) {
+      setStatus({ kind: 'success', message: 'HTML generated' });
+      return;
     }
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 2500);
+
+    setIsSaving(true);
+    try {
+      await onSaveTemplate(template);
+      setStatus({ kind: 'success', message: '✓ Saved' });
+    } catch (error) {
+      setStatus({
+        kind: 'error',
+        message:
+          error instanceof Error && error.message
+            ? error.message
+            : 'Could not save your email template. Please try again.',
+      });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleCopyHtml = async () => {
@@ -241,6 +297,7 @@ export const EmailTemplatePreview: React.FC<EmailTemplatePreviewProps> = ({
                 value={template.brandName}
                 onChange={(e) => updateField('brandName', e.target.value)}
                 placeholder="StellarAlerts"
+                maxLength={80}
                 className={FIELD_INPUT_CLASS}
               />
             </div>
@@ -308,6 +365,7 @@ export const EmailTemplatePreview: React.FC<EmailTemplatePreviewProps> = ({
                 value={template.footerText}
                 onChange={(e) => updateField('footerText', e.target.value)}
                 rows={2}
+                maxLength={280}
                 className={FIELD_INPUT_CLASS}
               />
             </div>
@@ -359,9 +417,18 @@ export const EmailTemplatePreview: React.FC<EmailTemplatePreviewProps> = ({
             <div className="flex flex-wrap gap-3 pt-1">
               <button
                 type="submit"
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold text-sm transition-all cursor-pointer"
+                disabled={isSaving}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-semibold text-sm transition-all cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
               >
-                {onSaveTemplate ? 'Save Template' : 'Generate HTML'}
+                {onSaveTemplate ? (isSaving ? 'Saving…' : 'Save Template') : 'Generate HTML'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsPreviewOpen(true)}
+                aria-haspopup="dialog"
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-500 to-fuchsia-600 hover:from-purple-400 hover:to-fuchsia-500 text-white font-semibold text-sm transition-all cursor-pointer"
+              >
+                Preview
               </button>
               <button
                 type="button"
@@ -377,15 +444,24 @@ export const EmailTemplatePreview: React.FC<EmailTemplatePreviewProps> = ({
               >
                 Copy HTML
               </button>
-              {saved && (
+              {status?.kind === 'success' && (
                 <span
                   role="status"
                   className="px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-sm font-semibold"
                 >
-                  ✓ Saved
+                  {status.message}
                 </span>
               )}
             </div>
+
+            {status?.kind === 'error' && (
+              <p
+                role="alert"
+                className="px-3 py-2 rounded-xl bg-red-500/10 border border-red-500/30 text-red-300 text-sm"
+              >
+                {status.message}
+              </p>
+            )}
           </div>
 
           {/* Live Preview */}
@@ -413,6 +489,97 @@ export const EmailTemplatePreview: React.FC<EmailTemplatePreviewProps> = ({
           </div>
         </div>
       </form>
+
+      {isPreviewOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 backdrop-blur-sm p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setIsPreviewOpen(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="email-preview-modal-title"
+            data-testid="email-preview-modal"
+            className="w-full max-w-5xl max-h-[92vh] flex flex-col rounded-2xl bg-slate-900 border border-slate-700 shadow-2xl overflow-hidden"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-4 border-b border-slate-800">
+              <div>
+                <h3 id="email-preview-modal-title" className="text-base font-bold text-white">
+                  Email Receipt Preview
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  This is how your branded payment receipt will render in an inbox.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <div
+                  role="group"
+                  aria-label="Preview width"
+                  className="flex rounded-lg border border-slate-700 overflow-hidden"
+                >
+                  <button
+                    type="button"
+                    aria-pressed={previewDevice === 'desktop'}
+                    onClick={() => setPreviewDevice('desktop')}
+                    className={`px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                      previewDevice === 'desktop'
+                        ? 'bg-cyan-500/20 text-cyan-200'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Desktop
+                  </button>
+                  <button
+                    type="button"
+                    aria-pressed={previewDevice === 'mobile'}
+                    onClick={() => setPreviewDevice('mobile')}
+                    className={`px-3 py-1.5 text-xs font-semibold transition-colors cursor-pointer ${
+                      previewDevice === 'mobile'
+                        ? 'bg-cyan-500/20 text-cyan-200'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Mobile
+                  </button>
+                </div>
+                <button
+                  ref={closeButtonRef}
+                  type="button"
+                  onClick={() => setIsPreviewOpen(false)}
+                  aria-label="Close preview"
+                  className="h-8 w-8 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-lg leading-none cursor-pointer"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <div className="flex-1 overflow-auto bg-slate-950 p-4 flex justify-center">
+              <iframe
+                title="Full-size payment receipt email preview"
+                srcDoc={previewHtml}
+                sandbox=""
+                data-testid="email-preview-modal-frame"
+                style={{ width: previewDevice === 'mobile' ? 390 : '100%' }}
+                className="h-[620px] max-w-full bg-white border-0 block rounded-lg"
+              />
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 border-t border-slate-800">
+              <p className="text-[11px] text-slate-500">
+                Saved branding is applied to future payment receipt emails.
+              </p>
+              <button
+                type="button"
+                onClick={() => void handleCopyHtml()}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors cursor-pointer"
+              >
+                Copy HTML
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

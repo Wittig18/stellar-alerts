@@ -4,12 +4,18 @@ import { prisma } from '../../lib/prisma';
 import { KeyRotationManager } from '../../utils/key-rotation-manager';
 import { cryptoVault } from '../../utils/crypto-vault';
 import { validateUrlForSsrf, ssrfSafeFetch } from '../../utils/ssrf';
+import { generateWebhookSignature } from '../../utils/webhook-signer';
 import {
   buildCursorWhere,
   buildCursorPage,
   CURSOR_ORDER_BY,
   CursorError,
 } from '../../utils/pagination';
+import {
+  replayDefense,
+  type ReplayCheckContext,
+  type ReplayCheckResult,
+} from './replay-defense';
 
 export interface WebhookTestResult {
   success: boolean;
@@ -28,10 +34,57 @@ export interface WebhookHealthScorecard {
   failedDeliveries7d: number;
 }
 
+export interface WebhookRotationResult {
+  id: string;
+  secret: string;
+  previousSecretExpiresAt: Date;
+}
+
 const WEBHOOK_TEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Window during which a webhook's previous signing secret is still accepted
+ * after a rotation (#721). Chosen to give subscribers a full day to roll the
+ * new secret into their own verification config before the old one is
+ * decommissioned.
+ */
+export const SECRET_ROTATION_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
+
+type EncryptedSecretRow = {
+  keyVersion: number;
+  secretIv: string;
+  secretAuthTag: string;
+  secretCiphertext: string;
+};
+
+function decryptStoredSecret(row: EncryptedSecretRow): string {
+  const encrypted = [
+    String(row.keyVersion),
+    row.secretIv,
+    row.secretAuthTag,
+    row.secretCiphertext,
+  ].join(':');
+  return cryptoVault.decrypt(encrypted);
+}
 
 export class WebhooksService {
   private keyRotationManager = new KeyRotationManager();
+
+  /**
+   * Enforces replay defense (#718) for inbound signed webhook / API-webhook
+   * requests: the presented nonce must be unseen (consumed in Redis with a
+   * 5-minute TTL) and the timestamp must sit inside the ±30s drift window.
+   *
+   * Throws a 401 AuthenticationError (and writes a HIGH-severity
+   * WEBHOOK_REPLAY_ATTEMPT audit entry) on rejection.
+   */
+  public async assertNoReplay(input: {
+    nonce?: string | null;
+    timestamp?: string | number | null;
+    context?: ReplayCheckContext;
+  }): Promise<Extract<ReplayCheckResult, { ok: true }>> {
+    return replayDefense.assertFresh(input);
+  }
 
   /**
    * Computes the 7-day delivery success rate and latency health scorecard for a webhook.
@@ -188,8 +241,11 @@ export class WebhooksService {
       select: {
         id: true,
         webhookId: true,
+        requestUrl: true,
+        requestPayload: true,
         statusCode: true,
         responseBody: true,
+        durationMs: true,
         error: true,
         sentAt: true,
         createdAt: true,
@@ -211,6 +267,127 @@ export class WebhooksService {
     return { success: true };
   }
 
+  /**
+   * Rotates a webhook's signing secret with zero downtime for subscribers
+   * (#721). The current secret is demoted to "previous" and kept, encrypted,
+   * for `SECRET_ROTATION_GRACE_PERIOD_MS` so deliveries during the grace
+   * window carry signatures for both the new and the old secret
+   * (`X-Stellar-Signature` / `X-Stellar-Signature-Secondary`). Subscribers
+   * who haven't redeployed the new secret yet keep verifying successfully
+   * until the window closes, at which point the previous secret is dropped.
+   *
+   * The new plaintext secret is returned exactly once — like `addWebhook`,
+   * it is never persisted or logged in plaintext.
+   */
+  async rotateSecret(id: string, userId: string): Promise<WebhookRotationResult> {
+    const webhook = await prisma.webhook.findFirst({ where: { id, userId } });
+    if (!webhook) {
+      throw new Error('Webhook not found');
+    }
+
+    const newSecret = crypto.randomBytes(32).toString('hex');
+    const encryptedNew = cryptoVault.encrypt(newSecret);
+    const [newVersion, newIv, newAuthTag, newCiphertext] = encryptedNew.split(':');
+    const previousSecretExpiresAt = new Date(Date.now() + SECRET_ROTATION_GRACE_PERIOD_MS);
+
+    await prisma.webhook.update({
+      where: { id },
+      data: {
+        secretCiphertext: newCiphertext,
+        secretIv: newIv,
+        secretAuthTag: newAuthTag,
+        keyVersion: parseInt(newVersion, 10),
+        // Demote the current secret rather than whatever was previously
+        // demoted — only one prior secret is ever honored at a time, so a
+        // rotation triggered mid-grace-period simply restarts the window on
+        // the most recently active secret.
+        previousSecretCiphertext: webhook.secretCiphertext,
+        previousSecretIv: webhook.secretIv,
+        previousSecretAuthTag: webhook.secretAuthTag,
+        previousKeyVersion: webhook.keyVersion,
+        previousSecretExpiresAt,
+      },
+    });
+
+    // The in-memory manager (used only as a fallback below) must forget any
+    // cached state for this webhook so it doesn't resurrect a stale secret.
+    this.keyRotationManager.setKeyState(id, { activeSecret: newSecret });
+
+    return { id, secret: newSecret, previousSecretExpiresAt };
+  }
+
+  /**
+   * Builds the dual-signature headers for a webhook delivery, honoring a
+   * still-active rotation grace period (#721). Returns the primary secret's
+   * headers plus, when the previous secret hasn't expired yet, a secondary
+   * signature computed with it so subscribers can verify against either.
+   */
+  buildDualSignatureHeaders(
+    webhook: EncryptedSecretRow & {
+      id: string;
+      previousSecretCiphertext?: string | null;
+      previousSecretIv?: string | null;
+      previousSecretAuthTag?: string | null;
+      previousKeyVersion?: number | null;
+      previousSecretExpiresAt?: Date | null;
+    },
+    payload: string
+  ): { headers: Record<string, string>; nonce: string; timestamp: number } {
+    const activeSecret = decryptStoredSecret(webhook);
+    const timestamp = Date.now();
+    const nonce = crypto.randomBytes(16).toString('hex');
+
+    const primary = generateWebhookSignature(payload, activeSecret, timestamp, nonce);
+    const headers: Record<string, string> = {
+      'X-Stellar-Signature': primary.headerValue,
+      'X-Stellar-Alerts-Nonce': nonce,
+    };
+
+    const graceActive =
+      webhook.previousSecretCiphertext &&
+      webhook.previousSecretIv &&
+      webhook.previousSecretAuthTag &&
+      webhook.previousKeyVersion != null &&
+      webhook.previousSecretExpiresAt &&
+      webhook.previousSecretExpiresAt.getTime() > Date.now();
+
+    if (graceActive) {
+      const previousSecret = decryptStoredSecret({
+        keyVersion: webhook.previousKeyVersion!,
+        secretIv: webhook.previousSecretIv!,
+        secretAuthTag: webhook.previousSecretAuthTag!,
+        secretCiphertext: webhook.previousSecretCiphertext!,
+      });
+      const secondary = generateWebhookSignature(payload, previousSecret, timestamp, nonce);
+      headers['X-Stellar-Signature-Secondary'] = secondary.headerValue;
+    }
+
+    return { headers, nonce, timestamp };
+  }
+
+  /**
+   * Clears an expired previous secret so it stops being reported as "in
+   * grace" and the ciphertext isn't retained longer than necessary. Safe to
+   * call unconditionally; it is a no-op when no rotation is pending or the
+   * grace period hasn't elapsed yet. Intended to be swept periodically (e.g.
+   * from the cleanup worker) as well as opportunistically on delivery.
+   */
+  async decommissionExpiredPreviousSecret(id: string): Promise<void> {
+    await prisma.webhook.updateMany({
+      where: {
+        id,
+        previousSecretExpiresAt: { lte: new Date() },
+      },
+      data: {
+        previousSecretCiphertext: null,
+        previousSecretIv: null,
+        previousSecretAuthTag: null,
+        previousKeyVersion: null,
+        previousSecretExpiresAt: null,
+      },
+    });
+  }
+
   async sendTestWebhook(id: string, userId: string): Promise<WebhookTestResult> {
     const webhook = await prisma.webhook.findUnique({ where: { id } });
 
@@ -218,13 +395,7 @@ export class WebhooksService {
       throw new Error('Webhook not found');
     }
 
-    const encrypted = [
-      String(webhook.keyVersion),
-      webhook.secretIv,
-      webhook.secretAuthTag,
-      webhook.secretCiphertext,
-    ].join(':');
-    const secret = cryptoVault.decrypt(encrypted);
+    await this.decommissionExpiredPreviousSecret(id);
 
     const payload = JSON.stringify({
       event: 'webhook.ping',
@@ -235,19 +406,11 @@ export class WebhooksService {
       },
     });
 
-    if (!this.keyRotationManager.getKeyState(webhook.id)) {
-      this.keyRotationManager.setKeyState(webhook.id, { activeSecret: secret });
-    }
-    const signatures = this.keyRotationManager.sign(payload, webhook.id);
-
+    const { headers: signatureHeaders } = this.buildDualSignatureHeaders(webhook, payload);
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'X-Stellar-Signature': signatures.primary.headerValue,
-      'X-Stellar-Alerts-Nonce': signatures.primary.nonce,
+      ...signatureHeaders,
     };
-    if (signatures.secondary) {
-      headers['X-Stellar-Signature-Secondary'] = signatures.secondary.headerValue;
-    }
 
     try {
       const response = await ssrfSafeFetch(webhook.url, {

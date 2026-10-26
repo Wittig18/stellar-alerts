@@ -30,6 +30,44 @@ model User {
   refreshSessions        RefreshSession[]
   telegramSyncCodes      TelegramSyncCode[]
   simulations            TransactionSimulation[]
+  apiKeys                ApiKey[]
+}
+
+// ── Developer API Keys & Granular Bitmask RBAC (#730) ───────────────────────
+//
+// Long-lived developer API keys for automation/bots/microservices, each
+// carrying a permission scope bitmask (see ScopeMatrix in
+// modules/auth/api-key-rbac.ts) instead of all-or-nothing admin access. Only
+// the SHA-256 hash of the raw key is stored (`keyHash`), so a leaked database
+// cannot recover usable keys; the plaintext key is shown exactly once at
+// creation. `scopes` is a plain integer whose set bits encode the granted
+// permission scopes (wallets:read, wallets:write, alerts:write,
+// webhooks:admin), checked in constant time by a single bitwise AND in the
+// rbac middleware before a route handler runs.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Human-readable label the developer chose (e.g. "prod telemetry bot").
+  name       String
+  // SHA-256 hash of the raw API key — the only key material persisted. The
+  // raw key is returned to the caller exactly once on creation.
+  keyHash    String    @unique
+  // Non-secret prefix (e.g. "sk_live_abcd…") shown in listings so a developer
+  // can identify a key without exposing it.
+  keyPrefix  String
+  // Bitmask of granted permission scopes. Each bit corresponds to one entry
+  // in ScopeMatrix; 0 means no scopes (the key can authenticate but do nothing).
+  scopes     Int       @default(0)
+  isActive   Boolean   @default(false)
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([userId])
+  @@index([keyHash])
+  @@index([isActive])
 }
 
 model Wallet {
@@ -38,12 +76,16 @@ model Wallet {
   user       User             @relation(fields: [userId], references: [id])
   publicKey  String           @unique
   label      String?
+  tags       String[]         @default([])
+  metadata   Json             @default("{}")
+  deletedAt  DateTime?
   createdAt   DateTime         @default(now())
   payments   Payment[]
   cursor     IngestionCursor?
   alertRules AlertRule[]
 
   @@index([userId, createdAt])
+  @@index([deletedAt])
 }
 
 model IngestionCursor {
@@ -83,12 +125,35 @@ model Payment {
   @@index([walletId])
   @@index([asset])
   @@index([walletId, receivedAt])
+  @@index([createdAt])
+}
+
+// Cold storage for payments older than 90 days, partitioned for archival
+model PaymentArchive {
+  id          String   @id @default(cuid())
+  walletId    String
+  txHash      String   @unique
+  fromAddress String
+  amount      Decimal
+  asset       String
+  assetIssuer String?
+  memo        String?
+  receivedAt  DateTime
+  createdAt   DateTime @default(now())
+  archivedAt  DateTime @default(now())
+
+  @@index([walletId])
+  @@index([asset])
+  @@index([walletId, receivedAt])
+  @@index([createdAt])
+  @@index([archivedAt])
 }
 
 model OutboxEvent {
   id          String    @id @default(cuid())
   eventType   String
   aggregateId String
+  idempotencyKey String? @unique
   payload     Json
   status      String    @default("pending")
   attempts    Int       @default(0)
@@ -125,6 +190,9 @@ model NotificationPreference {
   enabledChannels   String[] @default([])
   language          String  @default("EN")
   filterRules       Json?   // Stores filter rule group as JSON
+  // Merchant-customized payment receipt branding (#572), see
+  // utils/email-template.ts for the normalized shape.
+  emailTemplate     Json?
 }
 
 model DeliveryLog {
@@ -134,6 +202,7 @@ model DeliveryLog {
   status    String
   error     String?
   attempt   Int      @default(1)
+  durationMs Float?
   createdAt DateTime @default(now())
 
   @@unique([paymentId, channel])
@@ -260,22 +329,38 @@ model Webhook {
   secretIv          String
   secretAuthTag     String
   keyVersion        Int                      @default(1)
+  // Previous signing secret retained for the dual-verification grace period
+  // after a rotation (#721). Null when no rotation is currently in progress.
+  previousSecretCiphertext String?
+  previousSecretIv         String?
+  previousSecretAuthTag    String?
+  previousKeyVersion       Int?
+  // When the previous secret stops being accepted. Set to now() + grace
+  // period at rotation time; cleared once expired or on the next rotation.
+  previousSecretExpiresAt  DateTime?
   payloadTemplate   String?
   isActive          Boolean                  @default(true)
   createdAt         DateTime                 @default(now())
   logs              WebhookLog[]
   circuitBreaker    WebhookCircuitBreaker?
+
+  @@index([previousSecretExpiresAt])
 }
 
 model WebhookLog {
-  id           String   @id @default(cuid())
-  webhookId    String
-  webhook      Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
-  statusCode   Int?
-  responseBody String?
-  error        String?
-  sentAt       DateTime @default(now())
-  createdAt    DateTime @default(now())
+  id             String   @id @default(cuid())
+  webhookId      String
+  webhook        Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  requestUrl     String?
+  requestPayload String?
+  statusCode     Int?
+  responseBody   String?
+  durationMs     Float?
+  error          String?
+  sentAt         DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  @@index([webhookId, sentAt])
 }
 
 model WebhookCircuitBreaker {

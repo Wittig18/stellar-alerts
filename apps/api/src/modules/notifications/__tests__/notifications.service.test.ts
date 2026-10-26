@@ -173,3 +173,93 @@ describe('NotificationsService whatsapp opt-in/opt-out', () => {
     );
   });
 });
+
+describe('NotificationsService email template preferences (#572)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('persists a normalized branded receipt template', async () => {
+    await notificationsService.updatePreferences('user-1', {
+      emailTemplate: {
+        brandName: '  Northwind Goods  ',
+        logoUrl: 'https://cdn.example.com/logo.png',
+        primaryColor: '#F80',
+        accentColor: '#ABCDEF',
+        footerText: '  Thanks for your business.  ',
+      },
+    });
+
+    const call = (prisma.notificationPreference.upsert as any).mock.calls[0][0];
+    expect(call.where).toEqual({ userId: 'user-1' });
+    expect(call.create).toMatchObject({
+      emailTemplate: {
+        brandName: 'Northwind Goods',
+        logoUrl: 'https://cdn.example.com/logo.png',
+        primaryColor: '#ff8800',
+        accentColor: '#abcdef',
+        footerText: 'Thanks for your business.',
+      },
+    });
+    expect(call.update).toMatchObject({ emailTemplate: call.create.emailTemplate });
+  });
+
+  it('rejects malformed templates without writing to the database', async () => {
+    await expect(
+      notificationsService.updatePreferences('user-1', {
+        emailTemplate: {
+          brandName: 'Northwind Goods',
+          logoUrl: '',
+          primaryColor: 'not-a-color',
+          accentColor: '#7c3aed',
+          footerText: '',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'INVALID_EMAIL_TEMPLATE' });
+
+    expect(prisma.notificationPreference.upsert).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-https logo URLs', async () => {
+    await expect(
+      notificationsService.updatePreferences('user-1', {
+        emailTemplate: {
+          brandName: 'Northwind Goods',
+          logoUrl: 'javascript:alert(1)',
+          primaryColor: '#0ea5e9',
+          accentColor: '#7c3aed',
+          footerText: '',
+        },
+      }),
+    ).rejects.toThrow('emailTemplate.logoUrl must use https.');
+
+    expect(prisma.notificationPreference.upsert).not.toHaveBeenCalled();
+  });
+
+  it('clears the saved template when null is sent', async () => {
+    await notificationsService.updatePreferences('user-1', { emailTemplate: null });
+
+    const call = (prisma.notificationPreference.upsert as any).mock.calls[0][0];
+    expect(call.update).toMatchObject({ emailTemplate: null });
+  });
+
+  it('returns the saved template from getPreferences', async () => {
+    const saved = {
+      brandName: 'Northwind Goods',
+      logoUrl: '',
+      primaryColor: '#123456',
+      accentColor: '#abcdef',
+      footerText: 'Thanks!',
+    };
+    (prisma.notificationPreference.findUnique as any).mockResolvedValue({
+      id: 'pref-1',
+      userId: 'user-1',
+      emailTemplate: saved,
+      minAmount: null,
+    });
+
+    const preferences = await notificationsService.getPreferences('user-1');
+
+    expect(preferences?.emailTemplate).toEqual(saved);
+  });
+});

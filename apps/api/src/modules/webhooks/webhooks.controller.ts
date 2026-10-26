@@ -1,18 +1,20 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import { createWebhookSchema, webhookParamsSchema, listWebhookLogsQuerySchema } from './webhooks.schema';
+import { webhookParamsSchema, listWebhookLogsQuerySchema } from './webhooks.schema';
+import { validateWebhookRegistration } from './webhook.validator';
 import { webhooksService } from './webhooks.service';
 import { CursorError } from '../../utils/pagination';
 import { NotFoundError, zodValidationError } from '../../lib/errors';
 
 export class WebhooksController {
   async addWebhook(request: FastifyRequest, reply: FastifyReply) {
-    const parsed = createWebhookSchema.safeParse(request.body);
-    if (!parsed.success) {
-      throw zodValidationError(parsed, 'Invalid payload');
-    }
+    const validated = await validateWebhookRegistration(request.body);
 
     const userId = (request as any).user.id;
-    const webhook = await webhooksService.addWebhook(userId, parsed.data.url, parsed.data.payloadTemplate);
+    const webhook = await webhooksService.addWebhook(
+      userId,
+      validated.url,
+      validated.payloadTemplate
+    );
     return reply.status(201).send({ success: true, webhook });
   }
 
@@ -32,6 +34,30 @@ export class WebhooksController {
       const userId = (request as any).user.id;
       await webhooksService.removeWebhook(parsed.data.id, userId);
       return reply.send({ success: true });
+    } catch (error: any) {
+      if (error.message === 'Webhook not found') {
+        throw new NotFoundError(error.message);
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Rotates a webhook's signing secret (#721). The new secret is returned
+   * once in the response body; the previous secret keeps verifying for
+   * SECRET_ROTATION_GRACE_PERIOD_MS so in-flight subscriber deployments
+   * don't start failing signature checks mid-rotation.
+   */
+  async rotateSecret(request: FastifyRequest, reply: FastifyReply) {
+    const parsed = webhookParamsSchema.safeParse(request.params);
+    if (!parsed.success) {
+      throw zodValidationError(parsed, 'Invalid parameters');
+    }
+
+    try {
+      const userId = (request as any).user.id;
+      const result = await webhooksService.rotateSecret(parsed.data.id, userId);
+      return reply.status(200).send({ success: true, rotation: result });
     } catch (error: any) {
       if (error.message === 'Webhook not found') {
         throw new NotFoundError(error.message);

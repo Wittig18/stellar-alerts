@@ -12,16 +12,20 @@ import {
   routeEventToUsers,
   getSacMetadata,
 } from '../lib/soroban';
+import { contractRouter } from '../lib/contract-router';
 import { withWalletLock } from '../lib/lock';
+import { distributedLockManager } from '../lib/redlock';
 import { shouldAlert, PaymentContext } from '../lib/rules-engine';
 import { evaluateAlertRules, evaluateAndDispatch, AlertRuleRecord, NormalizedPaymentEvent } from '../lib/alert-rule-evaluator';
 import { MemoryMonitor, MemorySnapshot } from '../utils/memory-monitor';
 import { appendPaymentChecksum } from '../services/checksumChain.service';
 import { createLogger } from '../lib/logger';
+import { outboxService } from '../modules/outbox/outbox.service';
 import { WorkerLifecycleManager } from '../lib/worker-lifecycle';
 import { startTelemetry, shutdownTelemetry } from '../lib/telemetry';
 import { startWorkerMetricsServer, stopWorkerMetricsServer } from '../lib/worker-metrics-server';
 import { trace, SpanStatusCode, TraceFlags } from '@opentelemetry/api';
+import { FullJitterBackoff } from './watcher/stream-reconnect';
 
 export const watcherLifecycle = new WorkerLifecycleManager({
   workerName: 'WatcherWorker',
@@ -220,14 +224,12 @@ export async function processPaymentRecord(
               fromAddress,
               receivedAt: receivedAt.toISOString(),
             };
-            await tx.outboxEvent.createMany({
-              data: [
-                ...(shouldSendAlert
-                  ? [{ eventType: 'payment.alert', aggregateId: persistedPayment.id, payload: eventPayload }]
-                  : []),
-                { eventType: 'payment.realtime', aggregateId: persistedPayment.id, payload: eventPayload },
-              ],
-            });
+            await outboxService.record(tx, [
+              ...(shouldSendAlert
+                ? [{ eventType: 'payment.alert' as const, aggregateId: persistedPayment.id, payload: eventPayload }]
+                : []),
+              { eventType: 'payment.realtime' as const, aggregateId: persistedPayment.id, payload: eventPayload },
+            ]);
           }
 
           let cursorGap = { hasGap: false, ledgerDelta: 0 };
@@ -633,6 +635,8 @@ export type StartHorizonSSEStreamOptions = {
   maxReconnectDelayMs?: number;
   maxQueuedMessages?: number;
   heartbeatTimeoutMs?: number;
+  /** Injectable RNG for the Full Jitter backoff (#726) — tests pass a fixed generator for determinism. */
+  reconnectRandom?: () => number;
 };
 
 export const streamMetrics = {
@@ -648,7 +652,6 @@ export async function startHorizonSSEStream(
 ): Promise<() => void> {
   return tracer.startActiveSpan('watcher.startHorizonSSEStream', async (span) => {
     let isClosed = false;
-    let attempts = 1;
     let currentClose: (() => void) | null = null;
     let heartbeatTimeout: NodeJS.Timeout | null = null;
     let reconnectTimeout: NodeJS.Timeout | null = null;
@@ -661,10 +664,31 @@ export async function startHorizonSSEStream(
       return noopClose;
     }
 
-    const maxAttempts = options.maxReconnectAttempts ?? Infinity;
+    // Coordinate with peer worker replicas via distributed locking (#744)
+    const lock = await distributedLockManager.acquireWalletLock(wallet.id);
+    if (!lock) {
+      log.info(
+        `[WatcherStream] 🔒 Distributed lock for wallet ${wallet.publicKey.substring(0, 8)}... (${wallet.id}) held by peer replica. Skipping stream.`
+      );
+      span.setStatus({ code: SpanStatusCode.OK });
+      span.end();
+      return noopClose;
+    }
+
     const reconnectDelay = options.reconnectDelayMs ?? 1000;
     const maxReconnectDelay = options.maxReconnectDelayMs ?? reconnectDelay * 30;
     const maxQueuedMessages = options.maxQueuedMessages ?? 50;
+
+    // Decorrelated Full Jitter backoff (#726): bounds the reconnect delay at
+    // maxReconnectDelay and randomizes it within [0, min(ceiling, base*2^n)]
+    // so hundreds of streams dropped by the same Horizon outage don't all
+    // retry on the same clock tick and re-trigger 429 rate limiting.
+    const backoff = new FullJitterBackoff({
+      baseMs: reconnectDelay,
+      ceilingMs: maxReconnectDelay,
+      maxAttempts: options.maxReconnectAttempts ?? Infinity,
+      random: options.reconnectRandom,
+    });
 
     // Bounded backpressure: process messages one at a time in arrival order so a
     // slow consumer (e.g. a slow DB write) never lets concurrent handler calls pile
@@ -759,7 +783,7 @@ export async function startHorizonSSEStream(
         const handlers: StreamHandlerOptions = {
           onmessage: async (record: HorizonOperationRecord) => {
             resetHeartbeat();
-            attempts = 1;
+            backoff.reset();
             console.log(`[WatcherStream] ⚡ Live SSE stream message received: ${record.type}`);
             await enqueueMessage(async () => {
               await processPaymentRecord(wallet, record);
@@ -771,9 +795,8 @@ export async function startHorizonSSEStream(
             console.error(`[WatcherStream] SSE stream error for ${wallet.publicKey.substring(0, 8)}...:`, errMsg);
             cleanupCurrent();
             if (isClosed) return;
-            if (attempts < maxAttempts) {
-              const delay = Math.min(reconnectDelay * 2 ** (attempts - 1), maxReconnectDelay);
-              attempts++;
+            const delay = backoff.onFailure();
+            if (delay !== null) {
               streamMetrics.reconnects++;
               reconnectTimeout = setTimeout(() => {
                 connect();
@@ -786,9 +809,8 @@ export async function startHorizonSSEStream(
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error(`[WatcherStream] Failed to open SSE stream: ${errMsg}`);
-        if (!isClosed && attempts < maxAttempts) {
-          const delay = Math.min(reconnectDelay * 2 ** (attempts - 1), maxReconnectDelay);
-          attempts++;
+        const delay = !isClosed ? backoff.onFailure() : null;
+        if (delay !== null) {
           streamMetrics.reconnects++;
           reconnectTimeout = setTimeout(() => {
             void connect();
@@ -810,6 +832,7 @@ export async function startHorizonSSEStream(
     return () => {
       isClosed = true;
       cleanupCurrent();
+      void distributedLockManager.releaseWalletLock(wallet.id);
     };
   });
 }
@@ -868,6 +891,33 @@ export async function processWalletsConcurrently(
   await Promise.all(workers);
 }
 
+/** Contracts processed in parallel per poll; keeps 100 subscriptions from running strictly one by one. */
+const SOROBAN_CONTRACT_CONCURRENCY = 5;
+
+/**
+ * Processes all subscribed Soroban contracts with a bounded worker pool, so a
+ * slow contract no longer delays every other subscription in the iteration.
+ */
+export async function processSorobanContractsConcurrently(
+  contractIds: string[],
+  concurrency = SOROBAN_CONTRACT_CONCURRENCY,
+): Promise<void> {
+  const queue = [...contractIds];
+  const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const contractId = queue.shift();
+      if (!contractId) break;
+      try {
+        await processSorobanContractEvents(contractId);
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[WatcherWorker] Error processing contract ${contractId}:`, errMsg);
+      }
+    }
+  });
+  await Promise.all(workers);
+}
+
 export async function pollOnce() {
   return tracer.startActiveSpan('watcher.pollOnce', async (pollSpan) => {
     try {
@@ -887,14 +937,7 @@ export async function pollOnce() {
       }
       const contractIds = getActiveContractIds();
       if (contractIds.length > 0) {
-        for (const contractId of contractIds) {
-          try {
-            await processSorobanContractEvents(contractId);
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            console.error(`[WatcherWorker] Error processing contract ${contractId}:`, errMsg);
-          }
-        }
+        await processSorobanContractsConcurrently(contractIds);
       }
       pollSpan.setStatus({ code: SpanStatusCode.OK });
     } catch (err: unknown) {
@@ -936,8 +979,18 @@ export async function runWatcher() {
   watcherLifecycle.registerCleanup('prisma', async () => {
     await prisma.$disconnect();
   });
+  watcherLifecycle.registerCleanup('distributedLocks', async () => {
+    await distributedLockManager.releaseAll();
+  });
 
   await loadContractRegistry();
+
+  // Default alert channel; real delivery channels register themselves the same way.
+  contractRouter.registerChannel('log', (alert) => {
+    log.info(
+      `[SorobanRouter] ${alert.topic} on ${alert.contractId.substring(0, 8)}... -> ${alert.userIds.length} user(s)`,
+    );
+  });
 
   const poll = async () => {
     return watcherLifecycle.runTask(async () => {
@@ -982,9 +1035,7 @@ export async function runWatcher() {
             log.info(
               `[WatcherWorker] Processing ${contractIds.length} Soroban contract subscriptions...`,
             );
-            for (const contractId of contractIds) {
-              await processSorobanContractEvents(contractId);
-            }
+            await processSorobanContractsConcurrently(contractIds);
           }
           pollSpan.setStatus({ code: SpanStatusCode.OK });
         } catch (err) {
@@ -1068,6 +1119,13 @@ async function processSorobanContractEvents(contractId: string) {
             log.info(
               `[SorobanRouter] Event ${route.topic} from ${contractId.substring(0, 8)}... routed to ${route.userIds.length} user(s)`,
             );
+
+            await contractRouter.dispatchToChannels({
+              contractId,
+              topic: route.topic,
+              userIds: route.userIds,
+              event,
+            });
 
             // `event.ledgerSeq` is always set by fetchContractEventsInRange
             // (it enriches every event with `ledgerSeq = evt.ledger || currentStart`),
@@ -1198,6 +1256,8 @@ if (require.main === module) {
   registerSupervisorHeartbeat();
   startMemoryMonitor();
   runWatcher();
+  // Loaded lazily so importing the watcher (e.g. in tests) never opens relay connections.
+  void import('./outbox.worker').then(({ runOutboxRelay }) => runOutboxRelay());
 
   // Issue #20 / #536: Graceful shutdown for the watcher worker process
   let watcherIntervalId: NodeJS.Timeout | undefined;

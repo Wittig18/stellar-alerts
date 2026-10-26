@@ -21,6 +21,20 @@ export async function notificationsRoutes(app: FastifyInstance) {
     notificationsController.getPreferences.bind(notificationsController)
   );
 
+  // Current-user alias of the preference endpoints, used by the dashboard's
+  // notification preferences modal. Same controller, same MFA protection.
+  app.get(
+    '/users/me/preferences',
+    { preHandler: [authenticateHook] },
+    notificationsController.getPreferences.bind(notificationsController)
+  );
+
+  app.put(
+    '/users/me/preferences',
+    { preHandler: [authenticateHook] },
+    notificationsController.updatePreferences.bind(notificationsController)
+  );
+
   // Freelancer Channel Preferences setup flow (#259)
   app.post(
     '/freelancer/preferences',

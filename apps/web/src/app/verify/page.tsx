@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useRef, useState, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { signIn } from 'next-auth/react';
 import Link from 'next/link';
@@ -13,10 +13,19 @@ function VerifyContent() {
   const [status, setStatus] = useState<'verifying' | 'success' | 'error'>(token ? 'verifying' : 'error');
   const [errorMessage, setErrorMessage] = useState(token ? '' : 'Missing authentication token in URL.');
 
-  useEffect(() => {
-    if (!token) return;
+  // Magic tokens are single-use. Guard against StrictMode / re-render double
+  // invocations burning the token before the first attempt resolves.
+  const attempted = useRef(false);
 
-    let isMounted = true;
+  useEffect(() => {
+    if (!token || attempted.current) return;
+    attempted.current = true;
+
+    // Drop the token from the address bar and history so it is not leaked
+    // through screenshots, referrers or browser history.
+    window.history.replaceState(null, '', window.location.pathname);
+
+    let redirectTimer: ReturnType<typeof setTimeout> | undefined;
 
     async function verify() {
       try {
@@ -26,31 +35,25 @@ function VerifyContent() {
         });
 
         if (res?.ok) {
-          if (isMounted) {
-            setStatus('success');
-            setTimeout(() => {
-              router.push('/dashboard');
-            }, 1200);
-          }
+          setStatus('success');
+          redirectTimer = setTimeout(() => {
+            router.replace('/dashboard');
+          }, 1200);
         } else {
-          if (isMounted) {
-            setStatus('error');
-            setErrorMessage('Invalid or expired magic link. Please request a new one.');
-          }
+          setStatus('error');
+          setErrorMessage('Invalid or expired magic link. Please request a new one.');
         }
       } catch (err: unknown) {
         console.error('Verification error:', err);
-        if (isMounted) {
-          setStatus('error');
-          setErrorMessage('Could not connect to authentication service.');
-        }
+        setStatus('error');
+        setErrorMessage('Could not connect to authentication service.');
       }
     }
 
     verify();
 
     return () => {
-      isMounted = false;
+      if (redirectTimer) clearTimeout(redirectTimer);
     };
   }, [token, router]);
 
@@ -110,12 +113,17 @@ function VerifyContent() {
             <p className="text-gray-400 text-xs mt-2 leading-relaxed">{errorMessage}</p>
           </div>
 
-          <Link
-            href="/"
-            className="inline-block w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-sm shadow-lg transition-all"
-          >
-            Return to Home
-          </Link>
+          <div className="space-y-3">
+            <Link
+              href="/auth/signin?error=expired"
+              className="inline-block w-full py-3 rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-white font-bold text-sm shadow-lg transition-all"
+            >
+              Request a New Magic Link
+            </Link>
+            <Link href="/" className="block text-xs text-gray-400 hover:text-white underline underline-offset-4">
+              Return to Home
+            </Link>
+          </div>
         </div>
       )}
     </div>

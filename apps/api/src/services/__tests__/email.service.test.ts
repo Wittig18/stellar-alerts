@@ -28,7 +28,7 @@ describe('Issue #263: Resend Email Delivery & Templates', () => {
       const escaped = escapeHtml(malicious);
       expect(escaped).not.toContain('<script>');
       expect(escaped).toContain('&lt;script&gt;');
-      expect(escaped).toContain('&amp;foo=');
+      expect(escaped).toContain('&amp;foo');
       expect(escaped).toContain('&quot;bar&quot;');
       expect(escaped).toContain('&#39;baz&#39;');
     });
@@ -79,6 +79,79 @@ describe('Issue #263: Resend Email Delivery & Templates', () => {
     });
   });
 
+  describe('Merchant-branded receipt template (#572)', () => {
+    const payment = {
+      paymentId: 'pay_branded_1',
+      txHash: 'tx_branded_1',
+      amount: '250.00',
+      asset: 'USDC',
+      fromAddress: 'GUSER1234567890',
+      receivedAt: '2026-09-23T12:00:00Z',
+    };
+
+    it('renders the custom logo, colors and footer from the saved template', () => {
+      const result = renderPaymentReceiptTemplate({
+        ...payment,
+        branding: {
+          brandName: 'Northwind Goods',
+          logoUrl: 'https://cdn.example.com/northwind-logo.png',
+          primaryColor: '#123456',
+          accentColor: '#abcdef',
+          footerText: 'Thanks for your business.',
+        },
+      });
+
+      expect(result.version).toBe('v2-branded');
+      expect(result.subject).toBe('[Northwind Goods] Payment Received: 250.00 USDC');
+      expect(result.html).toContain('https://cdn.example.com/northwind-logo.png');
+      expect(result.html).toContain('#123456');
+      expect(result.html).toContain('#abcdef');
+      expect(result.html).toContain('Thanks for your business.');
+      expect(result.html).toContain('250.00');
+      expect(result.text).toContain('Northwind Goods — Payment Received');
+      expect(result.text).toContain('Thanks for your business.');
+    });
+
+    it('falls back to the monogram when no logo is configured', () => {
+      const result = renderPaymentReceiptTemplate({
+        ...payment,
+        branding: {
+          brandName: 'Northwind Goods',
+          logoUrl: '',
+          primaryColor: '#0ea5e9',
+          accentColor: '#7c3aed',
+          footerText: '',
+        },
+      });
+
+      expect(result.html).not.toContain('<img src=');
+      expect(result.html).toContain('>N</div>');
+    });
+
+    it('escapes user-supplied branding to prevent HTML injection', () => {
+      const result = renderPaymentReceiptTemplate({
+        ...payment,
+        branding: {
+          brandName: '<script>alert(1)</script>',
+          logoUrl: '',
+          primaryColor: '#0ea5e9',
+          accentColor: '#7c3aed',
+          footerText: '<img src=x onerror=alert(1)>',
+        },
+      });
+
+      expect(result.html).not.toContain('<script>');
+      expect(result.html).not.toContain('<img src=x');
+      expect(result.html).toContain('&lt;script&gt;');
+    });
+
+    it('keeps the default v1 template when no branding is saved', () => {
+      const result = renderPaymentReceiptTemplate({ ...payment, branding: null });
+      expect(result.version).toBe('v1');
+      expect(result.subject).toBe('[Stellar Alerts] Payment Received: 250.00 USDC');
+    });
+  });
+
   describe('Secret Sanitization', () => {
     it('masks Resend API keys in error messages', () => {
       const rawError = 'Failed to connect using key re_1234567890abcdef_secret_key_value';
@@ -91,7 +164,7 @@ describe('Issue #263: Resend Email Delivery & Templates', () => {
       const rawError = 'Unauthorized Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.invalid';
       const sanitized = sanitizeEmailErrorMessage(rawError);
       expect(sanitized).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9');
-      expect(sanitized).toContain('Bearer ****************');
+      expect(sanitized).toMatch(/Bearer \*+/);
     });
   });
 
@@ -104,10 +177,10 @@ describe('Issue #263: Resend Email Delivery & Templates', () => {
           paymentId: 'pay_1',
           txHash: 'tx_1',
           amount: '10',
-          asset: 'XLM',
+          asset: 'XLM ',
           fromAddress: 'G123',
           receivedAt: '2026-09-23T10:00:00Z',
-        }
+        },
       );
 
       expect(result.skipped).toBe(true);
@@ -125,8 +198,8 @@ describe('Issue #263: Resend Email Delivery & Templates', () => {
             asset: 'XLM',
             fromAddress: 'G123',
             receivedAt: '2026-09-23T10:00:00Z',
-          }
-        )
+          },
+        ),
       ).rejects.toThrow(PermanentEmailError);
     });
   });

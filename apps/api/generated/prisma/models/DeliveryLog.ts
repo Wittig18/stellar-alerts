@@ -28,10 +28,12 @@ export type AggregateDeliveryLog = {
 
 export type DeliveryLogAvgAggregateOutputType = {
   attempt: number | null
+  durationMs: number | null
 }
 
 export type DeliveryLogSumAggregateOutputType = {
   attempt: number | null
+  durationMs: number | null
 }
 
 export type DeliveryLogMinAggregateOutputType = {
@@ -41,6 +43,7 @@ export type DeliveryLogMinAggregateOutputType = {
   status: string | null
   error: string | null
   attempt: number | null
+  durationMs: number | null
   createdAt: Date | null
 }
 
@@ -51,6 +54,7 @@ export type DeliveryLogMaxAggregateOutputType = {
   status: string | null
   error: string | null
   attempt: number | null
+  durationMs: number | null
   createdAt: Date | null
 }
 
@@ -61,6 +65,7 @@ export type DeliveryLogCountAggregateOutputType = {
   status: number
   error: number
   attempt: number
+  durationMs: number
   createdAt: number
   _all: number
 }
@@ -68,10 +73,12 @@ export type DeliveryLogCountAggregateOutputType = {
 
 export type DeliveryLogAvgAggregateInputType = {
   attempt?: true
+  durationMs?: true
 }
 
 export type DeliveryLogSumAggregateInputType = {
   attempt?: true
+  durationMs?: true
 }
 
 export type DeliveryLogMinAggregateInputType = {
@@ -81,6 +88,7 @@ export type DeliveryLogMinAggregateInputType = {
   status?: true
   error?: true
   attempt?: true
+  durationMs?: true
   createdAt?: true
 }
 
@@ -91,6 +99,7 @@ export type DeliveryLogMaxAggregateInputType = {
   status?: true
   error?: true
   attempt?: true
+  durationMs?: true
   createdAt?: true
 }
 
@@ -101,6 +110,7 @@ export type DeliveryLogCountAggregateInputType = {
   status?: true
   error?: true
   attempt?: true
+  durationMs?: true
   createdAt?: true
   _all?: true
 }
@@ -198,6 +208,7 @@ export type DeliveryLogGroupByOutputType = {
   status: string
   error: string | null
   attempt: number
+  durationMs: number | null
   createdAt: Date
   _count: DeliveryLogCountAggregateOutputType | null
   _avg: DeliveryLogAvgAggregateOutputType | null
@@ -231,6 +242,7 @@ export type DeliveryLogWhereInput = {
   status?: Prisma.StringFilter<"DeliveryLog"> | string
   error?: Prisma.StringNullableFilter<"DeliveryLog"> | string | null
   attempt?: Prisma.IntFilter<"DeliveryLog"> | number
+  durationMs?: Prisma.FloatNullableFilter<"DeliveryLog"> | number | null
   createdAt?: Prisma.DateTimeFilter<"DeliveryLog"> | Date | string
 }
 
@@ -241,6 +253,7 @@ export type DeliveryLogOrderByWithRelationInput = {
   status?: Prisma.SortOrder
   error?: Prisma.SortOrderInput | Prisma.SortOrder
   attempt?: Prisma.SortOrder
+  durationMs?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
 }
 
@@ -255,6 +268,7 @@ export type DeliveryLogWhereUniqueInput = Prisma.AtLeast<{
   status?: Prisma.StringFilter<"DeliveryLog"> | string
   error?: Prisma.StringNullableFilter<"DeliveryLog"> | string | null
   attempt?: Prisma.IntFilter<"DeliveryLog"> | number
+  durationMs?: Prisma.FloatNullableFilter<"DeliveryLog"> | number | null
   createdAt?: Prisma.DateTimeFilter<"DeliveryLog"> | Date | string
 }, "id" | "paymentId_channel">
 
@@ -265,6 +279,7 @@ export type DeliveryLogOrderByWithAggregationInput = {
   status?: Prisma.SortOrder
   error?: Prisma.SortOrderInput | Prisma.SortOrder
   attempt?: Prisma.SortOrder
+  durationMs?: Prisma.SortOrderInput | Prisma.SortOrder
   createdAt?: Prisma.SortOrder
   _count?: Prisma.DeliveryLogCountOrderByAggregateInput
   _avg?: Prisma.DeliveryLogAvgOrderByAggregateInput
@@ -283,6 +298,7 @@ export type DeliveryLogScalarWhereWithAggregatesInput = {
   status?: Prisma.StringWithAggregatesFilter<"DeliveryLog"> | string
   error?: Prisma.StringNullableWithAggregatesFilter<"DeliveryLog"> | string | null
   attempt?: Prisma.IntWithAggregatesFilter<"DeliveryLog"> | number
+  durationMs?: Prisma.FloatNullableWithAggregatesFilter<"DeliveryLog"> | number | null
   createdAt?: Prisma.DateTimeWithAggregatesFilter<"DeliveryLog"> | Date | string
 }
 
@@ -293,6 +309,7 @@ export type DeliveryLogCreateInput = {
   status: string
   error?: string | null
   attempt?: number
+  durationMs?: number | null
   createdAt?: Date | string
 }
 
@@ -303,6 +320,7 @@ export type DeliveryLogUncheckedCreateInput = {
   status: string
   error?: string | null
   attempt?: number
+  durationMs?: number | null
   createdAt?: Date | string
 }
 
@@ -313,6 +331,7 @@ export type DeliveryLogUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   error?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   attempt?: Prisma.IntFieldUpdateOperationsInput | number
+  durationMs?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -323,6 +342,7 @@ export type DeliveryLogUncheckedUpdateInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   error?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   attempt?: Prisma.IntFieldUpdateOperationsInput | number
+  durationMs?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -333,6 +353,7 @@ export type DeliveryLogCreateManyInput = {
   status: string
   error?: string | null
   attempt?: number
+  durationMs?: number | null
   createdAt?: Date | string
 }
 
@@ -343,6 +364,7 @@ export type DeliveryLogUpdateManyMutationInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   error?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   attempt?: Prisma.IntFieldUpdateOperationsInput | number
+  durationMs?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -353,6 +375,7 @@ export type DeliveryLogUncheckedUpdateManyInput = {
   status?: Prisma.StringFieldUpdateOperationsInput | string
   error?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   attempt?: Prisma.IntFieldUpdateOperationsInput | number
+  durationMs?: Prisma.NullableFloatFieldUpdateOperationsInput | number | null
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -368,11 +391,13 @@ export type DeliveryLogCountOrderByAggregateInput = {
   status?: Prisma.SortOrder
   error?: Prisma.SortOrder
   attempt?: Prisma.SortOrder
+  durationMs?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
 }
 
 export type DeliveryLogAvgOrderByAggregateInput = {
   attempt?: Prisma.SortOrder
+  durationMs?: Prisma.SortOrder
 }
 
 export type DeliveryLogMaxOrderByAggregateInput = {
@@ -382,6 +407,7 @@ export type DeliveryLogMaxOrderByAggregateInput = {
   status?: Prisma.SortOrder
   error?: Prisma.SortOrder
   attempt?: Prisma.SortOrder
+  durationMs?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
 }
 
@@ -392,11 +418,21 @@ export type DeliveryLogMinOrderByAggregateInput = {
   status?: Prisma.SortOrder
   error?: Prisma.SortOrder
   attempt?: Prisma.SortOrder
+  durationMs?: Prisma.SortOrder
   createdAt?: Prisma.SortOrder
 }
 
 export type DeliveryLogSumOrderByAggregateInput = {
   attempt?: Prisma.SortOrder
+  durationMs?: Prisma.SortOrder
+}
+
+export type NullableFloatFieldUpdateOperationsInput = {
+  set?: number | null
+  increment?: number
+  decrement?: number
+  multiply?: number
+  divide?: number
 }
 
 
@@ -408,6 +444,7 @@ export type DeliveryLogSelect<ExtArgs extends runtime.Types.Extensions.InternalA
   status?: boolean
   error?: boolean
   attempt?: boolean
+  durationMs?: boolean
   createdAt?: boolean
 }, ExtArgs["result"]["deliveryLog"]>
 
@@ -418,6 +455,7 @@ export type DeliveryLogSelectCreateManyAndReturn<ExtArgs extends runtime.Types.E
   status?: boolean
   error?: boolean
   attempt?: boolean
+  durationMs?: boolean
   createdAt?: boolean
 }, ExtArgs["result"]["deliveryLog"]>
 
@@ -428,6 +466,7 @@ export type DeliveryLogSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.E
   status?: boolean
   error?: boolean
   attempt?: boolean
+  durationMs?: boolean
   createdAt?: boolean
 }, ExtArgs["result"]["deliveryLog"]>
 
@@ -438,10 +477,11 @@ export type DeliveryLogSelectScalar = {
   status?: boolean
   error?: boolean
   attempt?: boolean
+  durationMs?: boolean
   createdAt?: boolean
 }
 
-export type DeliveryLogOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "paymentId" | "channel" | "status" | "error" | "attempt" | "createdAt", ExtArgs["result"]["deliveryLog"]>
+export type DeliveryLogOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "paymentId" | "channel" | "status" | "error" | "attempt" | "durationMs" | "createdAt", ExtArgs["result"]["deliveryLog"]>
 
 export type $DeliveryLogPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "DeliveryLog"
@@ -453,6 +493,7 @@ export type $DeliveryLogPayload<ExtArgs extends runtime.Types.Extensions.Interna
     status: string
     error: string | null
     attempt: number
+    durationMs: number | null
     createdAt: Date
   }, ExtArgs["result"]["deliveryLog"]>
   composites: {}
@@ -883,6 +924,7 @@ export interface DeliveryLogFieldRefs {
   readonly status: Prisma.FieldRef<"DeliveryLog", 'String'>
   readonly error: Prisma.FieldRef<"DeliveryLog", 'String'>
   readonly attempt: Prisma.FieldRef<"DeliveryLog", 'Int'>
+  readonly durationMs: Prisma.FieldRef<"DeliveryLog", 'Float'>
   readonly createdAt: Prisma.FieldRef<"DeliveryLog", 'DateTime'>
 }
     

@@ -2,10 +2,8 @@
 
 import { useCallback, useState } from 'react';
 import { useSession } from 'next-auth/react';
-import {
-  EmailTemplatePreview,
-  type EmailTemplateConfig,
-} from '@/components/dashboard';
+import { EmailTemplatePreview } from '@/components/dashboard';
+import { useEmailTemplatePreference } from '@/hooks/useEmailTemplatePreference';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:3001';
 
@@ -19,6 +17,10 @@ export default function SettingsPage() {
   const [form, setForm] = useState<SettingsForm>({ telegramChatId: '', emailEnabled: true });
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  const {
+    template: savedEmailTemplate,
+    saveTemplate: saveEmailTemplate,
+  } = useEmailTemplatePreference(session?.accessToken);
 
   const authHeaders = useCallback(() => {
     const headers: Record<string, string> = {};
@@ -47,18 +49,6 @@ export default function SettingsPage() {
       setStatus({ ok: false, message: 'Could not reach API server.' });
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handleSaveEmailTemplate = async (template: EmailTemplateConfig) => {
-    try {
-      await fetch(`${API_BASE_URL}/notifications/preferences`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeaders() },
-        body: JSON.stringify({ emailTemplate: template }),
-      });
-    } catch (err) {
-      console.error('Failed to save email template preferences:', err);
     }
   };
 
@@ -129,7 +119,10 @@ export default function SettingsPage() {
         {/* Email Template */}
         <div className="bg-[#0c0c14]/80 backdrop-blur-md rounded-3xl border border-white/10 p-7 hover:border-cyan-500/30 transition-all duration-500">
           <h2 className="text-lg font-bold text-white mb-4">Email Receipt Template</h2>
-          <EmailTemplatePreview onSaveTemplate={handleSaveEmailTemplate} />
+          <EmailTemplatePreview
+            initialTemplate={savedEmailTemplate ?? undefined}
+            onSaveTemplate={saveEmailTemplate}
+          />
         </div>
       </div>
     </div>

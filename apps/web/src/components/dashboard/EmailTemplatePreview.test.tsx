@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import {
   EmailTemplatePreview,
   DEFAULT_EMAIL_TEMPLATE,
@@ -63,5 +63,97 @@ describe('EmailTemplatePreview', () => {
       expect.objectContaining({ brandName: 'Acme Coffee' })
     );
     expect(await screen.findByText('✓ Saved')).toBeInTheDocument();
+  });
+
+  it('updates the live preview HTML when branding changes', () => {
+    render(<EmailTemplatePreview />);
+
+    fireEvent.change(screen.getByLabelText(/Brand Name/i), {
+      target: { value: 'Acme Coffee' },
+    });
+    fireEvent.change(screen.getByLabelText(/Brand Logo URL/i), {
+      target: { value: 'https://cdn.example.com/acme.png' },
+    });
+
+    const frame = screen.getByTestId('email-preview-frame');
+    const srcDoc = frame.getAttribute('srcdoc') ?? (frame as HTMLIFrameElement).srcdoc;
+
+    expect(srcDoc).toContain('Acme Coffee');
+    expect(srcDoc).toContain('https://cdn.example.com/acme.png');
+  });
+
+  it('opens the preview modal and closes it via the close button', () => {
+    render(<EmailTemplatePreview />);
+
+    expect(screen.queryByTestId('email-preview-modal')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByTestId('email-preview-modal-frame')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Close preview/i }));
+
+    expect(screen.queryByTestId('email-preview-modal')).not.toBeInTheDocument();
+  });
+
+  it('closes the preview modal on Escape and on backdrop click', () => {
+    render(<EmailTemplatePreview />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('email-preview-modal')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    const backdrop = screen.getByRole('dialog').parentElement as HTMLElement;
+    fireEvent.mouseDown(backdrop);
+    expect(screen.queryByTestId('email-preview-modal')).not.toBeInTheDocument();
+  });
+
+  it('switches the modal preview between desktop and mobile widths', () => {
+    render(<EmailTemplatePreview />);
+
+    fireEvent.click(screen.getByRole('button', { name: /^Preview$/i }));
+    const mobileToggle = screen.getByRole('button', { name: /^Mobile$/i });
+    fireEvent.click(mobileToggle);
+
+    expect(mobileToggle).toHaveAttribute('aria-pressed', 'true');
+    const modalFrame = screen.getByTestId('email-preview-modal-frame');
+    expect(modalFrame).toHaveStyle({ width: '390px' });
+  });
+
+  it('hydrates the editor from a saved template', async () => {
+    render(
+      <EmailTemplatePreview
+        initialTemplate={{
+          brandName: 'Hydrated Co',
+          primaryColor: '#112233',
+          accentColor: '#445566',
+        }}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByLabelText(/Brand Name/i)).toHaveValue('Hydrated Co'),
+    );
+
+    const frame = screen.getByTestId('email-preview-frame');
+    const srcDoc = frame.getAttribute('srcdoc') ?? (frame as HTMLIFrameElement).srcdoc;
+    expect(srcDoc).toContain('#112233');
+    expect(srcDoc).toContain('#445566');
+  });
+
+  it('shows the API error instead of a false saved confirmation', async () => {
+    const onSaveTemplate = vi
+      .fn()
+      .mockRejectedValue(new Error('emailTemplate.logoUrl must use https.'));
+
+    render(<EmailTemplatePreview onSaveTemplate={onSaveTemplate} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Save Template/i }));
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('emailTemplate.logoUrl must use https.');
+    expect(screen.queryByText('✓ Saved')).not.toBeInTheDocument();
   });
 });
